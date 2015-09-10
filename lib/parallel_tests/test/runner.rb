@@ -5,6 +5,8 @@ module ParallelTests
     class Runner
       NAME = 'Test'
 
+      THREAD_COMMAND_LOGGER_PREFIX = "parallel_tests_thread_command_logger_"
+
       class << self
         # --- usually overwritten by other runners
 
@@ -77,6 +79,7 @@ module ParallelTests
           cmd = "nice #{cmd}" if options[:nice]
           cmd = "#{cmd} 2>&1" if options[:combine_stderr]
           puts cmd if options[:verbose]
+          log_thread_command(cmd, process_number)
 
           execute_command_and_capture_output(env, cmd, options[:serialize_stdout])
         end
@@ -211,6 +214,14 @@ module ParallelTests
             "**{,/*/**}/*"
           end
           Dir[File.join(folder, pattern)].uniq
+        end
+
+        private
+
+        def log_thread_command(cmd, process_number)
+          File.open("log/#{THREAD_COMMAND_LOGGER_PREFIX}#{process_number}.log","w") do |file|
+            file.write(cmd)
+          end
         end
       end
     end
