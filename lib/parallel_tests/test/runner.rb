@@ -16,7 +16,7 @@ module ParallelTests
           'tmp/parallel_runtime_test.log'
         end
 
-        def test_suffix
+        def test_suffix(options={})
           /_(test|spec).rb$/
         end
 
@@ -170,10 +170,11 @@ module ParallelTests
             puts "Runtime found for #{tests.count(&:last)} of #{tests.size} tests"
           end
 
-          # fill gaps with average runtime
+          # fill gaps with unknown-runtime if given, average otherwise
           known, unknown = tests.partition(&:last)
           average = (known.any? ? known.map!(&:last).inject(:+) / known.size : 1)
-          unknown.each { |set| set[1] = average }
+          unknown_runtime = options[:unknown_runtime] || average
+          unknown.each { |set| set[1] = unknown_runtime }
         end
 
         def runtimes(tests, options)
@@ -195,7 +196,7 @@ module ParallelTests
           (tests || []).map do |file_or_folder|
             if File.directory?(file_or_folder)
               files = files_in_folder(file_or_folder, options)
-              files.grep(test_suffix).grep(options[:pattern]||//)
+              files.grep(test_suffix(options)).grep(options[:pattern]||//)
             else
               file_or_folder
             end
