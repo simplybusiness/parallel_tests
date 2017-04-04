@@ -133,6 +133,13 @@ describe 'CLI' do
     expect(result).not_to match(/TEST2.*TEST1.*TEST2/m)
   end
 
+  it "can show simulated output when serializing stdout" do
+    write 'spec/xxx_spec.rb', 'describe("it"){it("should"){sleep 1; puts "TEST1"}}'
+    result = run_tests "spec", :type => 'rspec', :add => "--serialize-stdout", export: 'PARALLEL_TEST_HEARTBEAT_INTERVAL=0.2'
+
+    expect(result).to match(/\.{5}.*TEST1/m)
+  end
+
   it "can serialize stdout and stderr" do
     write 'spec/xxx_spec.rb', '5.times{describe("it"){it("should"){sleep 0.01; $stderr.puts "errTEST1"; puts "TEST1"}}}'
     write 'spec/xxx2_spec.rb', 'sleep 0.01; 5.times{describe("it"){it("should"){sleep 0.01; $stderr.puts "errTEST2"; puts "TEST2"}}}'
@@ -151,6 +158,11 @@ describe 'CLI' do
     it "can exec given command non-parallel" do
       result = `#{executable} -e 'ruby -e "sleep(rand(10)/100.0); puts ENV[:TEST_ENV_NUMBER.to_s].inspect"' -n 4 --non-parallel`
       expect(result.split("\n")).to eq(%w["" "2" "3" "4"])
+    end
+
+    it "can exec given command with a restricted set of groups" do
+      result = `#{executable} -e 'ruby -e "print ENV[:TEST_ENV_NUMBER.to_s].to_i"' -n 4 --only-group 1,3`
+      expect(result.gsub('"','').split('').sort).to eq(%w[0 3])
     end
 
     it "can serialize stdout" do
@@ -195,6 +207,18 @@ describe 'CLI' do
     end
     result = run_tests("spec", processes: 2, type: 'rspec')
     expect(result.scan(/START|END/)).to eq(["START", "START", "END", "END"])
+  end
+
+  it "disables spring so correct database is used" do
+    write "spec/xxx_spec.rb", 'puts "SPRING: #{ENV["DISABLE_SPRING"]}"'
+    result = run_tests("spec", processes: 2, type: 'rspec')
+    expect(result).to include "SPRING: 1"
+  end
+
+  it "can enable spring" do
+    write "spec/xxx_spec.rb", 'puts "SPRING: #{ENV["DISABLE_SPRING"]}"'
+    result = run_tests("spec", processes: 2, type: 'rspec', export: "DISABLE_SPRING=0")
+    expect(result).to include "SPRING: 0"
   end
 
   it "runs with files that have spaces" do
@@ -279,6 +303,14 @@ describe 'CLI' do
 
   context "RSpec" do
     it_fails_without_any_files "rspec"
+
+    it "captures seed with random failures with --verbose" do
+      write 'spec/xxx_spec.rb', 'describe("it"){it("should"){puts "TEST1"}}'
+      write 'spec/xxx2_spec.rb', 'describe("it"){it("should"){1.should == 2}}'
+      result = run_tests "spec --verbose", :add => "--test-options '--seed 1234'", :fail => true, :type => 'rspec'
+      expect(result).to include("Randomized with seed 1234")
+      expect(result).to include("bundle exec rspec spec/xxx2_spec.rb --seed 1234")
+    end
   end
 
   context "Test::Unit" do
@@ -301,7 +333,7 @@ describe 'CLI' do
     before do
       write "features/steps/a.rb", "
         Given('I print TEST_ENV_NUMBER'){ puts \"YOUR TEST ENV IS \#{ENV['TEST_ENV_NUMBER']}!\" }
-        And('I sleep a bit'){ sleep 0.2 }
+        And('I sleep a bit'){ sleep 0.5 }
         And('I pass'){ true }
         And('I fail'){ fail }
       "
@@ -370,7 +402,6 @@ cucumber features/fail1.feature:2 # Scenario: xxx
     end
 
     it "groups by scenario" do
-      skip "ScenarioLineLogger not supported anymore after upgrading to Cucumber 2.0, please fix!"
       write "features/long.feature", <<-EOS
       Feature: xxx
         Scenario: xxx
@@ -399,11 +430,27 @@ cucumber features/fail1.feature:2 # Scenario: xxx
 
       expect(result).to include("2 processes for 2 features")
     end
+
+    it "captures seed with random failures with --verbose" do
+      write "features/good1.feature", "Feature: xxx\n  Scenario: xxx\n    Given I fail"
+      result = run_tests "features --verbose", :type => "cucumber", :add => '--test-options "--order random:1234"', :fail => true
+      expect(result).to include("Randomized with seed 1234")
+      expect(result).to include("bundle exec cucumber features/good1.feature --order random:1234")
+    end
   end
 
   context "Spinach" do
     before do
-      write "features/steps/a.rb", "class A < Spinach::FeatureSteps\n  Given 'I print TEST_ENV_NUMBER' do\n    puts \"YOUR TEST ENV IS \#{ENV['TEST_ENV_NUMBER']}!\"\n  end\n  And 'I sleep a bit' do\n    sleep 0.2\n  end\nend"
+      write "features/steps/a.rb", <<-RUBY.strip_heredoc
+        class A < Spinach::FeatureSteps
+          Given 'I print TEST_ENV_NUMBER' do
+            puts "YOUR TEST ENV IS \#{ENV['TEST_ENV_NUMBER']}!"
+          end
+          And 'I sleep a bit' do
+            sleep 0.2
+          end
+        end
+      RUBY
     end
 
     it "runs tests which outputs accented characters" do
@@ -417,7 +464,6 @@ cucumber features/fail1.feature:2 # Scenario: xxx
       write "features/good1.feature", "Feature: a\n  Scenario: xxx\n    Given I print TEST_ENV_NUMBER"
       write "features/good2.feature", "Feature: a\n  Scenario: xxx\n    Given I print TEST_ENV_NUMBER"
       write "features/b.feature", "Feature: b\n  Scenario: xxx\n    Given I FAIL" #Expect this not to be run
-      write "features/steps/a.rb", "class A < Spinach::FeatureSteps\nGiven('I print TEST_ENV_NUMBER'){ puts \"YOUR TEST ENV IS \#{ENV['TEST_ENV_NUMBER']}!\" }\nend"
 
       result = run_tests "features", :type => "spinach", :add => '--pattern good'
 
@@ -435,7 +481,7 @@ cucumber features/fail1.feature:2 # Scenario: xxx
         # needs sleep so that runtime loggers dont overwrite each other initially
         write "features/good#{i}.feature", "Feature: A\n  Scenario: xxx\n    Given I print TEST_ENV_NUMBER\n    And I sleep a bit"
       }
-      result = run_tests "features", :type => "spinach"
+      run_tests "features", :type => "spinach"
       expect(read(log).gsub(/\.\d+/,'').split("\n")).to match_array([
         "features/good0.feature:0",
         "features/good1.feature:0"

@@ -9,9 +9,7 @@ module ParallelTests
       class << self
         def run_tests(test_files, process_number, num_processes, options)
           exe = executable # expensive, so we cache
-          version = (exe =~ /\brspec\b/ ? 2 : 1)
-          cmd = [exe, options[:test_options], (rspec_2_color if version == 2), spec_opts, *test_files].compact.join(" ")
-          options = options.merge(:env => rspec_1_color) if version == 1
+          cmd = [exe, options[:test_options], color, spec_opts, *test_files].compact.join(" ")
           execute_command(cmd, process_number, num_processes, options)
         end
 
@@ -19,8 +17,6 @@ module ParallelTests
           cmd = case
           when File.exist?("bin/rspec")
             WINDOWS ? "ruby bin/rspec" : "bin/rspec"
-          when File.file?("script/spec")
-            "script/spec"
           when ParallelTests.bundler_enabled?
             cmd = (run("bundle show rspec-core") =~ %r{Could not find gem.*} ? "spec" : "rspec")
             "bundle exec #{cmd}"
@@ -49,6 +45,21 @@ module ParallelTests
           end
         end
 
+        def line_is_result?(line)
+          line =~ /\d+ examples?, \d+ failures?/
+        end
+
+        # remove old seed and add new seed
+        # --seed 1234
+        # --order rand
+        # --order rand:1234
+        # --order random:1234
+        def command_with_seed(cmd, seed)
+          clean = cmd.sub(/\s--(seed\s+\d+|order\s+rand(om)?(:\d+)?)\b/, '')
+          "#{clean} --seed #{seed}"
+        end
+
+
         private
 
         # so it can be stubbed....
@@ -56,15 +67,7 @@ module ParallelTests
           `#{cmd}`
         end
 
-        def rspec_1_color
-          if $stdout.tty?
-            {'RSPEC_COLOR' => "1"}
-          else
-            {}
-          end
-        end
-
-        def rspec_2_color
+        def color
           '--color --tty' if $stdout.tty?
         end
 

@@ -90,6 +90,11 @@ describe ParallelTests::Test::Runner do
         expect { call(["aaa", "bbb", "ccc"], 3, group_by: :runtime) }.to raise_error(RuntimeError)
       end
 
+      it "groups a lot of missing files when allow-missing is high" do
+        File.write("tmp/parallel_runtime_test.log", "xxx:123\nyyy:123\naaa:123")
+        call(["aaa", "bbb", "ccc"], 3, group_by: :runtime, allowed_missing_percent: 80)
+      end
+
       it "groups when there is enough log" do
         File.write("tmp/parallel_runtime_test.log", "xxx:123\nbbb:123\naaa:123")
         call(["aaa", "bbb", "ccc"], 3, group_by: :runtime)
@@ -156,25 +161,6 @@ Finished in 0.145069 seconds.
 EOF
 
       expect(call(output)).to eq(['10 tests, 20 assertions, 0 failures, 0 errors','14 tests, 20 assertions, 0 failures, 0 errors'])
-    end
-
-    it "is robust against scrambled output" do
-      output = <<EOF
-Loaded suite /opt/ruby-enterprise/lib/ruby/gems/1.8/gems/rake-0.8.4/lib/rake/rake_test_loader
-Started
-..............
-Finished in 0.145069 seconds.
-
-10 tests, 20 assertions, 0 failures, 0 errors
-Loaded suite /opt/ruby-enterprise/lib/ruby/gems/1.8/gems/rake-0.8.4/lib/rake/rake_test_loader
-Started
-..............
-Finished in 0.145069 seconds.
-
-14 te.dsts, 20 assertions, 0 failures, 0 errors
-EOF
-
-      expect(call(output)).to eq(['10 tests, 20 assertions, 0 failures, 0 errors','14 tedsts, 20 assertions, 0 failures, 0 errors'])
     end
 
     it "ignores color-codes" do
@@ -259,6 +245,18 @@ EOF
           expect(call(["a"], :pattern => /^a\/(y|z)_test/).sort).to eq([
             "a/y_test.rb",
             "a/z_test.rb",
+          ])
+        end
+      end
+    end
+
+    it "finds test files in folders using suffix and overriding built in suffix" do
+      with_files(['a/x_test.rb','a/y_test.rb','a/z_other.rb','a/x_different.rb']) do |root|
+        Dir.chdir root do
+          expect(call(["a"], :suffix => /_(test|other)\.rb$/).sort).to eq([
+            "a/x_test.rb",
+            "a/y_test.rb",
+            "a/z_other.rb",
           ])
         end
       end
@@ -366,6 +364,16 @@ EOF
       end
     end
 
+    it "sets process number to 1 for 0 if requested" do
+      run_with_file("puts ENV['TEST_ENV_NUMBER']") do |path|
+        result = call("ruby #{path}", 0, 4, first_is_1: true)
+        expect(result).to include({
+          :stdout => "1\n",
+          :exit_status => 0
+        })
+      end
+    end
+
     it 'sets PARALLEL_TEST_GROUPS so child processes know that they are being run under parallel_tests' do
       run_with_file("puts ENV['PARALLEL_TEST_GROUPS']") do |path|
         result = call("ruby #{path}", 1, 4, {})
@@ -462,6 +470,60 @@ EOF
       priority_without_nice = run_with_file(priority_cmd){ |cmd| call("ruby #{cmd}", 1, 4, {}) }.first.to_i
       priority_with_nice = run_with_file(priority_cmd){ |cmd| call("ruby #{cmd}", 1, 4, :nice => true) }.first.to_i
       expect(priority_without_nice).to be < priority_with_nice
+    end
+
+    it "returns command used" do
+      run_with_file("puts 123; exit 5") do |path|
+        env_vars = "TEST_ENV_NUMBER=2;export TEST_ENV_NUMBER;PARALLEL_TEST_GROUPS=4;export PARALLEL_TEST_GROUPS;"
+        result = call("ruby #{path}", 1, 4, {})
+        expect(result).to include({
+          :command => "#{env_vars}ruby #{path}"
+        })
+      end
+    end
+
+    describe "rspec seed" do
+      it "includes seed when provided" do
+        run_with_file("puts 'Run options: --seed 555'") do |path|
+          result = call("ruby #{path}", 1, 4, {})
+          expect(result).to include({
+            :seed => "555"
+          })
+        end
+      end
+
+      it "seed is nil when not provided" do
+        run_with_file("puts 555") do |path|
+          result = call("ruby #{path}", 1, 4, {})
+          expect(result).to include({
+            :seed => nil
+          })
+        end
+      end
+    end
+  end
+
+  describe ".command_with_seed" do
+    def call(args)
+      base = "ruby -Ilib:test test/minitest/test_minitest_unit.rb"
+      result = ParallelTests::Test::Runner.command_with_seed("#{base}#{args}", 555)
+      result.sub(base, '')
+    end
+
+    it "adds the randomized seed" do
+      expect(call("")).to eq(" --seed 555")
+    end
+
+    it "does not duplicate seed" do
+      expect(call(" --seed 123")).to eq(" --seed 555")
+    end
+
+    it "does not match strange seeds stuff" do
+      expect(call(" --seed 123asdasd")).to eq(" --seed 123asdasd --seed 555")
+    end
+
+    it "does not match non seeds" do
+      expect(call(" --seedling 123")).to eq(" --seedling 123 --seed 555")
     end
   end
 end

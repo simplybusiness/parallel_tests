@@ -131,9 +131,44 @@ describe ParallelTests do
       expect(ParallelTests.first_process?).to eq(true)
     end
 
-    it "is not first if env is set to something" do
+    it "is first if env is set to 1" do
+      ENV["TEST_ENV_NUMBER"] = "1"
+      expect(ParallelTests.first_process?).to eq(true)
+    end
+
+    it "is not first if env is set to something else" do
       ENV["TEST_ENV_NUMBER"] = "2"
       expect(ParallelTests.first_process?).to eq(false)
+    end
+  end
+
+  describe ".last_process?" do
+    it "is last if no envs are set" do
+      expect(ParallelTests.last_process?).to eq(true)
+    end
+
+    it "is last if envs are set to blank" do
+      ENV["TEST_ENV_NUMBER"] = ""
+      ENV["PARALLEL_TEST_GROUPS"] = ""
+      expect(ParallelTests.last_process?).to eq(true)
+    end
+
+    it "is last if TEST_ENV_NUMBER is set to PARALLEL_TEST_GROUPS" do
+      ENV["TEST_ENV_NUMBER"] = "4"
+      ENV["PARALLEL_TEST_GROUPS"] = "4"
+      expect(ParallelTests.last_process?).to eq(true)
+    end
+
+    it "is not last if TEST_ENV_NUMBER is set to else" do
+      ENV["TEST_ENV_NUMBER"] = "2"
+      ENV["PARALLEL_TEST_GROUPS"] = "4"
+      expect(ParallelTests.first_process?).to eq(false)
+    end
+  end
+
+  describe ".parent pid" do
+    it "returns a pid" do
+      expect(ParallelTests.parent_pid).to be > 0
     end
   end
 

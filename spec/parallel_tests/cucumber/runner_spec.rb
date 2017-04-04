@@ -24,4 +24,22 @@ describe ParallelTests::Cucumber::Runner do
       end
     end
   end
+
+  describe ".command_with_seed" do
+    def call(part)
+      ParallelTests::Cucumber::Runner.command_with_seed("cucumber#{part}", 555)
+    end
+
+    it "adds the randomized seed" do
+      expect(call("")).to eq("cucumber --order random:555")
+    end
+
+    it "does not duplicate existing random command" do
+      expect(call(" --order random good1.feature")).to eq("cucumber good1.feature --order random:555")
+    end
+
+    it "does not duplicate existing random command with seed" do
+      expect(call(" --order random:123 good1.feature")).to eq("cucumber good1.feature --order random:555")
+    end
+  end
 end

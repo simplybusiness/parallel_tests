@@ -8,8 +8,12 @@ module ParallelTests
     def run(argv)
       options = parse_options!(argv)
 
+      ENV['DISABLE_SPRING'] ||= '1'
+
       num_processes = ParallelTests.determine_number_of_processes(options[:count])
       num_processes = num_processes * (options[:multiply] || 1)
+
+      options[:first_is_1] ||= first_is_1?
 
       if options[:execute]
         execute_shell_command_in_parallel(options[:execute], num_processes, options)
@@ -22,8 +26,14 @@ module ParallelTests
 
     def execute_in_parallel(items, num_processes, options)
       Tempfile.open 'parallel_tests-lock' do |lock|
-        return Parallel.map(items, :in_threads => num_processes) do |item|
+        progress_indicator = simulate_output_for_ci if options[:serialize_stdout]
+
+        Parallel.map(items, :in_threads => num_processes) do |item|
           result = yield(item)
+          if progress_indicator && progress_indicator.alive?
+            progress_indicator.exit
+            puts
+          end
           reprint_output(result, lock.path) if options[:serialize_stdout]
           result
         end
@@ -51,7 +61,7 @@ module ParallelTests
           end
         end
 
-        report_results(test_results)
+        report_results(test_results, options)
       end
 
       abort final_fail_message if any_test_failed?(test_results)
@@ -59,7 +69,7 @@ module ParallelTests
 
     def run_tests(group, process_number, num_processes, options)
       if group.empty?
-        {:stdout => '', :exit_status => 0}
+        {:stdout => '', :exit_status => 0, :command => '', :seed => nil}
       else
         @runner.run_tests(group, process_number, num_processes, options)
       end
@@ -84,7 +94,7 @@ module ParallelTests
       end
     end
 
-    def report_results(test_results)
+    def report_results(test_results, options)
       results = @runner.find_results(test_results.map { |result| result[:stdout] }*"")
       puts ""
       puts @runner.summarize_results(results)
@@ -98,6 +108,22 @@ module ParallelTests
         puts failing_set[:command]
         puts "Checkout your local branch to the deployed SHA and add '--seed #{failing_set[:seed]}' to the command to run tests in the same order." if failing_set[:seed]
         puts ""
+      report_failure_rerun_commmand(test_results, options)
+      end
+    end
+
+    def report_failure_rerun_commmand(test_results, options)
+      failing_sets = test_results.reject { |r| r[:exit_status] == 0 }
+      return if failing_sets.none?
+
+      if options[:verbose]
+        puts "\n\nTests have failed for a parallel_test group. Use the following command to run the group again:\n\n"
+        failing_sets.each do |failing_set|
+          command = failing_set[:command]
+          command = command.gsub(/;export [A-Z_]+;/, ' ') # remove ugly export statements
+          command = @runner.command_with_seed(command, failing_set[:seed]) if failing_set[:seed]
+          puts command
+        end
       end
     end
 
@@ -129,7 +155,7 @@ module ParallelTests
           Options are:
         BANNER
         opts.on("-n [PROCESSES]", Integer, "How many processes to use, default: available CPUs") { |n| options[:count] = n }
-        opts.on("-p", "--pattern [PATTERN]", "run tests matching this pattern") { |pattern| options[:pattern] = /#{pattern}/ }
+        opts.on("-p", "--pattern [PATTERN]", "run tests matching this regex pattern") { |pattern| options[:pattern] = /#{pattern}/ }
         opts.on("--group-by [TYPE]", <<-TEXT.gsub(/^          /, '')
           group tests by:
                     found - order of finding files
@@ -169,6 +195,12 @@ module ParallelTests
         end
         opts.on("--turnip", "Support running Turnip tests (jnicklas/turnip) using RSpec") { options[:turnip] = true }
         opts.on("--rutabaga", "Support running Rutabaga tests (simplybusiness/rutabaga) using RSpec (supercedes --turnip)") { options[:rutabaga] = true }
+        opts.on("--suffix [PATTERN]", <<-TEXT.gsub(/^          /, '')
+          override built in test file pattern (should match suffix):
+                    '_spec\.rb$' - matches rspec files
+                    '_(test|spec).rb$' - matches test or spec files
+          TEXT
+          ) { |pattern| options[:suffix] = /#{pattern}/ }
         opts.on("--serialize-stdout", "Serialize stdout output, nothing will be written until everything is done") { options[:serialize_stdout] = true }
         opts.on("--combine-stderr", "Combine stderr into stdout, useful in conjunction with --serialize-stdout") { options[:combine_stderr] = true }
         opts.on("--non-parallel", "execute same commands but do not in parallel, needs --exec") { options[:non_parallel] = true }
@@ -176,7 +208,9 @@ module ParallelTests
         opts.on('--ignore-tags [PATTERN]', 'When counting steps ignore scenarios with tags that match this pattern')  { |arg| options[:ignore_tag_pattern] = arg }
         opts.on("--nice", "execute test commands with low priority.") { options[:nice] = true }
         opts.on("--runtime-log [PATH]", "Location of previously recorded test runtimes") { |path| options[:runtime_log] = path }
-        opts.on("--unknown-runtime [FLOAT]", "Use given number as unknown runtime (otherwise use average time)") { |time| options[:unknown_runtime] = time.to_f }
+        opts.on("--allowed-missing [INT]", Integer, "Allowed percentage of missing runtimes (default = 50)") { |percent| options[:allowed_missing_percent] = percent }
+        opts.on("--unknown-runtime [FLOAT]", Float, "Use given number as unknown runtime (otherwise use average time)") { |time| options[:unknown_runtime] = time }
+        opts.on("--first-is-1", "Use \"1\" as TEST_ENV_NUMBER to not reuse the default test environment") { options[:first_is_1] = true }
         opts.on("--verbose", "Print more output") { options[:verbose] = true }
         opts.on("-v", "--version", "Show Version") { puts ParallelTests::VERSION; exit }
         opts.on("-h", "--help", "Show this.") { puts opts; exit }
@@ -233,13 +267,17 @@ module ParallelTests
     end
 
     def execute_shell_command_in_parallel(command, num_processes, options)
-      runs = (0...num_processes).to_a
+      runs = if options[:only_group]
+        options[:only_group].map{|g| g - 1}
+      else
+        (0...num_processes).to_a
+      end
       results = if options[:non_parallel]
         runs.map do |i|
           ParallelTests::Test::Runner.execute_command(command, i, num_processes, options)
         end
       else
-        execute_in_parallel(runs, num_processes, options) do |i|
+        execute_in_parallel(runs, runs.size, options) do |i|
           ParallelTests::Test::Runner.execute_command(command, i, num_processes, options)
         end
       end.flatten
@@ -268,6 +306,22 @@ module ParallelTests
 
     def use_colors?
       $stdout.tty?
+    end
+
+    def first_is_1?
+      val = ENV["PARALLEL_TEST_FIRST_IS_1"]
+      ['1', 'true'].include?(val)
+    end
+
+    # CI systems often fail when there is no output for a long time, so simulate some output
+    def simulate_output_for_ci
+      Thread.new do
+        interval = ENV.fetch('PARALLEL_TEST_HEARTBEAT_INTERVAL', 60).to_f
+        loop do
+          sleep interval
+          print '.'
+        end
+      end
     end
   end
 end

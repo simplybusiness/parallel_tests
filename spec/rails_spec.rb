@@ -9,12 +9,14 @@ describe 'rails' do
     result
   end
 
-  ["rails32", "rails42"].each do |rails|
-    it "can create and run" do
+  ["rails32", "rails42", "rails50"].each do |rails|
+    it "can create and run #{rails}" do
       if RUBY_PLATFORM == "java"
         skip 'rails fixtures are not set up for java'
       elsif rails == 'rails32' && RUBY_VERSION >= '2.2.0'
         skip 'rails 3.2 does not work on ruby >= 2.2.0'
+      elsif rails == 'rails50' && RUBY_VERSION < '2.3.0'
+        skip 'rails 5.0 does not work on ruby < 2.3.0'
       end
 
       Dir.chdir("spec/fixtures/#{rails}") do
@@ -23,9 +25,12 @@ describe 'rails' do
           ENV.delete("RAILS_ENV")
           ENV.delete("RACK_ENV")
 
-          sh "bundle --local --path vendor/bundle"
+          sh "bundle config --local --path vendor/bundle"
+          sh "bundle install"
           sh "rm -rf db/*.sqlite3"
           sh "bundle exec rake db:setup parallel:create 2>&1"
+          # Also test the case where the DBs need to be dropped
+          sh "bundle exec rake parallel:drop parallel:create"
           sh "bundle exec rake parallel:prepare"
           sh "export RAILS_ENV=test && bundle exec rails runner User.create" # pollute the db
           out = sh "bundle exec rake parallel:prepare parallel:test"

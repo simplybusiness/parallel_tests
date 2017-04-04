@@ -7,6 +7,12 @@ require 'parallel_tests/test/runtime_logger'
 require 'parallel_tests/rspec/runtime_logger'
 require 'parallel_tests/rspec/summary_logger'
 
+String.class_eval do
+  def strip_heredoc
+    gsub(/^#{self[/^\s*/]}/, '')
+  end
+end
+
 OutputLogger = Struct.new(:output) do
   attr_reader :flock, :flush
   def puts(s=nil)
@@ -174,6 +180,7 @@ RSpec.configure do |config|
   end
 
   config.after do
+    ENV.delete "PARALLEL_TEST_GROUPS"
     ENV.delete "PARALLEL_TEST_PROCESSORS"
     ENV.delete "PARALLEL_TESTS_EXECUTABLE"
     ENV.delete "TEST_ENV_NUMBER"

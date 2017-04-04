@@ -5,10 +5,10 @@ class ParallelTests::RSpec::RuntimeLogger < ParallelTests::RSpec::LoggerBase
   def initialize(*args)
     super
     @example_times = Hash.new(0)
-    @group_nesting = 0 unless RSPEC_1
+    @group_nesting = 0
   end
 
-  if RSPEC_3
+  unless RSPEC_2
     RSpec::Core::Formatters.register self, :example_group_started, :example_group_finished, :start_dump
   end
 
@@ -38,6 +38,7 @@ class ParallelTests::RSpec::RuntimeLogger < ParallelTests::RSpec::LoggerBase
       end
       super if defined?(super)
     end
+    super if defined?(super)
   end
 
   def dump_summary(*args);end
